@@ -69,6 +69,82 @@ public sealed class ProjectStore
         _templateDir = templateDir;
         _webSkeletonDir = webSkeletonDir;
         Load();
+        RefreshAppKnowledge();
+    }
+
+    // 앱이 들고 있는 지식 (template 안, 프로젝트마다 덮어씀) — 일반 개념·팀 정의라 게임마다 다를 게 없다.
+    // 게임별 기록(현황·배운_것·밸런스·숫자_지도·결정_기록·notes …)은 여기 넣지 않는다 = 프로젝트 것, 안 건드림.
+    private static readonly string[] AppKnowledge =
+    {
+        "agents",
+        Path.Combine("기획", "기획팀_작업법.md"),
+        Path.Combine("참고", "godot"),
+    };
+
+    // 앱을 켤 때 모든 프로젝트 팀 문서의 AppKnowledge 를 지금 설치판 template 으로 맞춘다 — 앱 업데이트가 옛 프로젝트에도 닿게.
+    // 내용이 같은 파일은 안 씀, 프로젝트에만 있는 파일은 안 지움. 실패는 그 프로젝트만 건너뜀 (켜기를 막지 않음)
+    private void RefreshAppKnowledge()
+    {
+        if (false == Directory.Exists(_templateDir))
+        {
+            return;
+        }
+
+        foreach (Project project in _model.Projects)
+        {
+            string docs = ResolveTeamDocs(project);
+            if (false == Directory.Exists(docs))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (string entry in AppKnowledge)
+                {
+                    bool godotOnly = SamePath(entry, Path.Combine("참고", "godot"));
+                    if (godotOnly && project.IsWeb)
+                    {
+                        continue;
+                    }
+
+                    string source = Path.Combine(_templateDir, entry);
+                    string target = Path.Combine(docs, entry);
+                    if (File.Exists(source))
+                    {
+                        SyncFile(source, target);
+                    }
+                    else if (Directory.Exists(source))
+                    {
+                        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+                        {
+                            SyncFile(file, Path.Combine(target, Path.GetRelativePath(source, file)));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // 다음 켜기에 다시 — 문서가 열려 있어 잠긴 경우 등
+            }
+        }
+    }
+
+    private static void SyncFile(string source, string target)
+    {
+        byte[] content = File.ReadAllBytes(source);
+        if (File.Exists(target) && content.AsSpan().SequenceEqual(File.ReadAllBytes(target)))
+        {
+            return;
+        }
+
+        string? dir = Path.GetDirectoryName(target);
+        if (null != dir)
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        File.WriteAllBytes(target, content);
     }
 
     public IReadOnlyList<Project> Projects => _model.Projects;
