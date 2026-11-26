@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- AL-ZARD_GameMaker — Photino(웹뷰 창) 하나, Windows 판. WinExe = 콘솔 창 없이.
+         버전 = 이 <Version> 하나 (설치 파일 이름·제거 목록·릴리즈 노트가 다 이걸 씀). 한 번 뽑은 버전은 다시 뽑지 않음 -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>GameMaker</RootNamespace>
+    <AssemblyName>GameMaker</AssemblyName>
+    <Product>AL-ZARD_GameMaker</Product>
+    <Version>1.1.4</Version>
+    <SelfContained>false</SelfContained>
+    <SatelliteResourceLanguages>ko</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 서드파티 저작물 목록 (설치 폴더에 함께) -->
+    <None Update="NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 터미널 claude 에 붙이는 시스템 프롬프트 (Services/ClaudeTerminal.cs) -->
+    <None Update="claude_context.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- [새 프로젝트] 가 데이터 폴더 projects\<id>\docs 로 복사하는 팀 문서 템플릿 (Services/ProjectStore.cs) -->
+    <None Include="template\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 웹 프로젝트 새로 만들 때 게임 폴더에 복사하는 최소 뼈대 (Services/ProjectStore.cs) -->
+    <None Include="webskel\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

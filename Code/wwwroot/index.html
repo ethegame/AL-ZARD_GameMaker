@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>AL-ZARD_GameMaker</title>
+<!-- C# ↔ 화면 통로 (Photino) — 다른 스크립트보다 먼저 -->
+<script src="bridge.js"></script>
+<link rel="stylesheet" href="lib/xterm.css">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./lib/three/build/three.module.js", "three/addons/": "./lib/three/jsm/" } }
+</script>
+</head>
+<body>
+<!-- 사장님 화면: 사장님은 말로 시키고, 4팀(= 오른쪽 Claude)이 만든다.
+     4팀 현황판 2×2 (기획 · 프로그래밍 / 리소스 · QA) + 오른쪽 Claude 터미널.
+     각 칸 = 그 팀의 현황.md(지금·최근 완료·다음, Claude 가 씀) + 결과물. 개발 과정(작업대)은 숨김. 팀 = teams.js, 리소스 = app.js -->
+
+<!-- 맨 위 프로젝트 줄: 프로젝트 고르기 · [새 프로젝트] · [삭제]. 화면 = projects.js, C# = Views/MainWindow.Projects.cs -->
+<header id="project-bar">
+  <span class="label">프로젝트</span>
+  <select id="project-select" title="프로젝트 고르기 — 현황판·게임 칸·Claude 터미널이 그 프로젝트로 바뀜"></select>
+  <button id="btn-project-new" title="새 게임 프로젝트 (팀 문서 + 게임 폴더, 엔진 = Godot 또는 웹)">새 프로젝트</button>
+  <button id="btn-project-delete" title="지금 프로젝트 삭제 (게임 폴더·팀 문서 = 휴지통, 안 되면 윈도우가 다시 물음)">삭제</button>
+  <form id="project-new-form" hidden>
+    <input id="project-name" type="text" maxlength="40" placeholder="프로젝트 이름" autocomplete="off">
+    <input id="project-folder" type="text" maxlength="31" placeholder="영문 폴더 (비우면 game1…)" autocomplete="off">
+    <select id="project-engine" title="게임 엔진 — Godot (설치형) 또는 웹 (HTML5+JS, 브라우저로 바로 실행)">
+      <option value="godot" selected>Godot</option>
+      <option value="web">웹 (HTML5+JS)</option>
+    </select>
+    <button type="submit" class="primary">만들기</button>
+    <button type="button" id="btn-project-cancel">취소</button>
+  </form>
+  <span id="project-note" class="hint"></span>
+  <!-- GPU · VRAM 미터 (gpu.js, C# = Views/MainWindow.Gpu.cs). 값이 안 오면(맥) 숨김 -->
+  <div id="gpu-meter" hidden>
+    <div class="um-item"><span class="um-label">GPU</span><span class="um-bar"><span id="gpu-fill" class="um-fill"></span></span><span id="gpu-value" class="um-value">–</span></div>
+    <div class="um-item"><span class="um-label">VRAM</span><span class="um-bar"><span id="vram-fill" class="um-fill"></span></span><span id="vram-value" class="um-value">–</span></div>
+  </div>
+</header>
+
+<section class="quad" id="q-plan" data-team="plan">
+  <div class="quad-head">
+    <span class="dot"></span><h2>기획</h2><span class="now"></span>
+    <button class="btn-docs" title="이 팀 현황 문서가 있는 폴더 열기">문서</button>
+    <button class="btn-max" title="크게 / 원래대로">⤢</button>
+  </div>
+  <article class="status"></article>
+</section>
+
+<section class="quad" id="q-prog" data-team="prog">
+  <div class="quad-head">
+    <span class="dot"></span><h2>프로그래밍</h2><span class="now"></span>
+    <button class="btn-docs" title="이 팀 현황 문서가 있는 폴더 열기">문서</button>
+    <button class="btn-max" title="크게 / 원래대로">⤢</button>
+  </div>
+  <div id="games">
+    <span id="game-engine" class="hint"></span>
+    <ul id="game-list"></ul>
+    <span id="game-empty" class="hint" hidden>아직 Godot 프로젝트 없음 — 오른쪽 AI 에게 기획부터 시켜 보세요</span>
+  </div>
+  <article class="status"></article>
+</section>
+
+<section class="quad" id="q-res" data-team="res">
+  <div class="quad-head">
+    <span class="dot"></span><h2>리소스</h2><span class="now"></span>
+    <span id="server" title="ComfyUI 서버"><span id="server-dot"></span><span id="server-text">확인 중…</span></span>
+    <button id="btn-bench" title="작업대 (워크플로·입력값·직접 생성) 보기/숨기기">작업대</button>
+    <button class="btn-docs" title="이 팀 현황 문서가 있는 폴더 열기">문서</button>
+    <button class="btn-max" title="크게 / 원래대로">⤢</button>
+  </div>
+  <div id="res-body">
+    <div id="res-left">
+      <div class="comfy-missing" hidden>그림 도구(ComfyUI) 가 없습니다 — <button class="btn-comfy-guide">설치 방법</button></div>
+      <article class="status"></article>
+      <div id="gallery" title="최근 결과물 (클릭 = 오른쪽에 크게)"></div>
+    </div>
+    <main id="form-pane">
+      <div class="comfy-missing" hidden>그림 도구(ComfyUI) 가 없습니다 — <button class="btn-comfy-guide">설치 방법</button></div>
+      <div id="bench-tools" class="row">
+        <select id="wf-select" title="워크플로"></select>
+        <button id="btn-server">시작</button>
+        <button id="btn-comfy" title="ComfyUI 웹 화면">ComfyUI</button>
+        <button id="btn-log" title="ComfyUI 서버 로그">로그</button>
+        <button id="btn-import" title="Export (API) 로 저장한 json 가져오기">가져오기</button>
+        <button id="btn-wf-folder" title="workflows 폴더 열기">폴더</button>
+      </div>
+      <div id="form-head">
+        <span id="wf-empty" class="hint" hidden>워크플로가 없습니다 — ComfyUI 에서 Export (API) 로 저장해 가져오기</span>
+        <label class="check" title="세부 설정·값이 없는 노드까지 모두 보기"><input type="checkbox" id="show-all"> 전체 노드</label>
+      </div>
+      <div id="form"></div>
+      <footer id="run-bar">
+        <div id="progress"><div id="progress-fill"></div><span id="progress-text"></span></div>
+        <div class="row">
+          <button id="btn-run" class="primary" disabled>생성</button>
+          <button id="btn-cancel" hidden>중단</button>
+          <button id="btn-reset" title="이 워크플로의 입력값을 파일 기본값으로">기본값</button>
+        </div>
+      </footer>
+    </main>
+
+    <section id="view-pane">
+      <div id="view">
+        <canvas id="canvas"></canvas>
+        <img id="image" alt="" hidden>
+        <audio id="audio" controls hidden></audio>
+        <div id="view-empty">결과가 여기 표시됩니다</div>
+        <div id="view-tools" hidden>
+          <button id="btn-spin" title="자동 회전">회전</button>
+          <button id="btn-wire" title="와이어프레임">와이어</button>
+          <button id="btn-fit" title="화면 맞춤">맞춤</button>
+          <select id="clip-select" title="애니메이션 클립" hidden></select>
+          <span id="mesh-info"></span>
+        </div>
+      </div>
+      <div id="files-head">
+        <span id="run-title"></span>
+        <button id="btn-run-folder" hidden>폴더 열기</button>
+        <button id="btn-out-folder" title="outputs 폴더 열기">전체 결과</button>
+      </div>
+      <div id="files"></div>
+    </section>
+  </div>
+</section>
+
+<section class="quad" id="q-qa" data-team="qa">
+  <div class="quad-head">
+    <span class="dot"></span><h2>QA</h2><span class="now"></span>
+    <button class="btn-docs" title="이 팀 현황 문서가 있는 폴더 열기">문서</button>
+    <button class="btn-max" title="크게 / 원래대로">⤢</button>
+  </div>
+  <article class="status"></article>
+</section>
+
+<section id="chat-pane">
+  <div id="chat-head">
+    <h2 id="ai-title">Claude</h2>
+    <span id="team-now"></span>
+    <span id="term-state"></span>
+    <button id="btn-term-continue" title="이 폴더의 마지막 대화를 이어서" hidden>이어 하기</button>
+    <button id="btn-term-new" title="지금 세션을 끝내고 새 대화로 시작">새 세션</button>
+  </div>
+  <!-- 엔진 고르기 [자동][CLAUDE][GPT][GEMINI] — 바꾸면 터미널이 그 엔진으로 다시 뜸 (terminal.js, C# = Views/MainWindow.Ai.cs). 고른 값은 다음에 켜도 남음 -->
+  <div id="ai-row">
+    <button class="ai-tab ai-auto on" data-ai="auto" title="자동 — 새 대화를 열 때 Claude → GPT → GEMINI 순서로, 깔려 있고 남은 사용량이 10% 이상인 AI 를 골라요 (다 바닥이면 가장 많이 남은 AI)">자동</button>
+    <button class="ai-tab" data-ai="claude" title="Claude Code (Anthropic) — Claude 계정으로 로그인">CLAUDE</button>
+    <button class="ai-tab" data-ai="gpt" title="Codex (OpenAI) — ChatGPT 계정으로 로그인. 그림은 어느 AI 를 골라도 GPT 가 그려요">GPT</button>
+    <button class="ai-tab" data-ai="gemini" title="Antigravity (Google) — 구글 계정으로 로그인, 빠른 Gemini Flash 모델">GEMINI</button>
+  </div>
+  <!-- 사용량 미터 한 줄 — 지금 도는 엔진의 5 Hours · Weekly (usage.js). 마우스를 올리면 다시 차는 시각 -->
+  <div id="usage-meter"></div>
+  <div id="term"></div>
+  <!-- [⬆ 업데이트 <버전>] — 새 판이 있을 때만 (update.js, C# = Services/AppUpdater.cs) -->
+  <div id="update-row" hidden>
+    <button id="btn-update" class="primary" hidden>업데이트</button>
+    <div id="update-note" class="hint" hidden></div>
+  </div>
+  <div id="chat-foot">
+    <button id="btn-common" title="프로젝트 안내·작업 기록 (팀 문서 폴더의 notes.md) 열기">안내·기록</button>
+    <button id="btn-about" title="이번 버전 소식">새 소식</button>
+  </div>
+</section>
+
+<div id="toast" hidden></div>
+
+<!-- 그림 도구(ComfyUI) 설치 — 리소스 칸 [설치 방법]. 주인공 = [설치하기] (설치 폴더\ComfyUI 에 자동으로 받아 풂, C# = Views/MainWindow.Comfy.cs · Services/ComfyInstaller.cs).
+     이미 가진 사람은 접힌 칸에서 폴더를 정하면 C# 이 %LOCALAPPDATA%\AL-ZARD_GAMEMAKER\settings.json 에 저장 (comfy.js) -->
+<div id="comfy-guide" class="overlay" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><b>그림 도구(ComfyUI) 설치</b><button id="btn-guide-close">닫기</button></div>
+    <div class="sheet-body">
+      <p>AL-ZARD_GameMaker 는 그림 도구 없이도 기획·프로그래밍·QA 가 모두 돼요. 캐릭터·아이템 그림을 직접 만들고 싶을 때만 설치하세요.</p>
+      <h3>이 PC 에 맞는 판</h3>
+      <dl id="comfy-plan" class="plan">
+        <dt>그래픽카드</dt><dd id="plan-gpu">확인 중…</dd>
+        <dt>받을 판</dt><dd id="plan-asset">—</dd>
+        <dt>디스크 여유</dt><dd id="plan-free">—</dd>
+        <dt>설치 자리</dt><dd id="plan-folder">—</dd>
+      </dl>
+      <p id="plan-warning" class="plan-warning" hidden></p>
+      <div class="row">
+        <button id="btn-comfy-install" class="primary" disabled>설치하기</button>
+        <button id="btn-comfy-install-cancel" hidden>취소</button>
+      </div>
+      <div id="comfy-install-bar" class="install-bar" hidden><div id="comfy-install-fill"></div><span id="comfy-install-text"></span></div>
+      <p id="comfy-install-result" class="hint"></p>
+      <ul class="hint">
+        <li><b>NVIDIA 그래픽카드 권장</b> — 그래픽 메모리(VRAM) 8GB 이상, 12GB 면 넉넉해요. 아니면 아주 느리거나 안 될 수 있어요.</li>
+        <li>프로그램 약 2GB 를 받아 풀어요 (몇십 분 걸릴 수 있어요). 그림 모델은 한 개당 수 GB 라 디스크 여유 30GB 이상을 권해요.</li>
+        <li>그림 모델은 직접 받지 않아도 돼요 — 설치가 끝나면 오른쪽 AI 에게 "그림 모델 준비해 줘" 라고 하면 용량·라이선스를 먼저 알려 드리고 받아 둬요.</li>
+      </ul>
+      <details id="comfy-manual">
+        <summary>이미 ComfyUI 를 갖고 있다면</summary>
+        <p>ComfyUI 포터블(<a href="https://github.com/Comfy-Org/ComfyUI/releases" data-external>github.com/Comfy-Org/ComfyUI/releases</a> 의 ComfyUI_windows_portable_….7z 를 7-Zip 으로 푼 것)이 이미 있으면, 그 폴더(안에 <code>python_embeded</code> 와 <code>ComfyUI</code> 폴더가 있는 곳)를 고르고 [저장] 을 누르세요.</p>
+        <div class="row">
+          <input id="comfy-root" type="text" placeholder="C:\ComfyUI_windows_portable" autocomplete="off">
+          <button id="btn-comfy-pick">폴더 고르기</button>
+          <button id="btn-comfy-save">저장</button>
+        </div>
+        <p id="comfy-root-result" class="hint"></p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- 새 소식 (releasenotes.json) — 버전이 오르면 처음 켤 때 한 번 저절로 열림 (about.js) -->
+<div id="about" class="overlay" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><b id="about-title">새 소식</b><button id="btn-about-close">닫기</button></div>
+    <div class="sheet-body" id="about-body"></div>
+  </div>
+</div>
+
+<script src="lib/marked.min.js"></script>
+<script src="lib/purify.min.js"></script>
+<script src="lib/xterm.js"></script>
+<script src="lib/addon-fit.js"></script>
+<script src="lib/addon-unicode11.js"></script>
+<script type="module" src="app.js"></script>
+<script type="module" src="terminal.js"></script>
+<script type="module" src="games.js"></script>
+<script type="module" src="projects.js"></script>
+<script type="module" src="teams.js"></script>
+<script type="module" src="comfy.js"></script>
+<script type="module" src="about.js"></script>
+<script type="module" src="update.js"></script>
+<script type="module" src="usage.js"></script>
+<script type="module" src="gpu.js"></script>
+</body>
+</html>

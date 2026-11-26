@@ -1,0 +1,6 @@
+Code/bin/
+Code/obj/
+.vs/
+*.user
+Release/*.xml
+backup/

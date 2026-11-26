@@ -1,0 +1,28 @@
+AL-ZARD_GameMaker — 함께 들어 있는 다른 사람의 저작물 (Third-party notices)
+
+이 프로그램에는 아래 저작물이 함께 들어 있습니다. 각 저작물은 원래 라이선스를 따릅니다.
+라이선스 전문은 설치 폴더 안 해당 파일에 있습니다.
+
+1. 기획팀 작업법 문서 (template\기획\기획팀_작업법.md)
+   - 원문: 『현업 게임 기획자의 Claude Code 활용서』 (eremes81, https://github.com/eremes81/game-design-ai-practice)
+   - 라이선스: CC BY-NC-SA 4.0 — https://creativecommons.org/licenses/by-nc-sa/4.0/
+   - 이 문서만 이 라이선스이며 앱 코드와는 별개입니다. 원문에서 일부를 골라 고쳐 옮겼습니다.
+
+2. Godot 엔진 참고 문서 (template\참고\godot\)
+   - 원문: Claude-Code-Game-Studios (Donchitos, https://github.com/Donchitos/Claude-Code-Game-Studios) docs/engine-reference/godot/
+   - 라이선스: MIT — template\참고\godot\LICENSE_CCGS.txt
+   - VERSION.md 의 설치판 한 줄만 고쳤고 나머지는 원문 그대로입니다 (template\참고\godot\_출처.md).
+
+3. 화면 라이브러리 (wwwroot\lib\)
+   - xterm.js · addon-fit · addon-unicode11 — MIT (wwwroot\lib\XTERM_LICENSE)
+   - marked — MIT (wwwroot\lib\MARKED_LICENSE)
+   - DOMPurify — Apache-2.0 또는 MPL-2.0 (wwwroot\lib\DOMPURIFY_LICENSE)
+   - three.js — MIT (wwwroot\lib\three\LICENSE)
+
+4. 앱 창 (NuGet 패키지)
+   - Photino.NET · Photino.Native — Apache-2.0 (https://github.com/tryphotino)
+
+5. 설치할 때 따로 내려받는 것 (이 설치 파일에는 들어 있지 않음)
+   - Godot 엔진 4.7.2 — MIT (https://godotengine.org/license) — 설치 폴더\godot
+   - .NET 런타임 · Microsoft Edge WebView2 런타임 — Microsoft 배포 조건
+   - Claude Code — 각자 설치·로그인 (Anthropic 이용 약관)
