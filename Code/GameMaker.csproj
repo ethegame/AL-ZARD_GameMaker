@@ -10,7 +10,7 @@
     <RootNamespace>GameMaker</RootNamespace>
     <AssemblyName>GameMaker</AssemblyName>
     <Product>AL-ZARD_GameMaker</Product>
-    <Version>1.1.4</Version>
+    <Version>1.1.5</Version>
     <SelfContained>false</SelfContained>
     <SatelliteResourceLanguages>ko</SatelliteResourceLanguages>
   </PropertyGroup>

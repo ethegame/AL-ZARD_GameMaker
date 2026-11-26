@@ -1,5 +1,5 @@
 // 오른쪽 AI 터미널: xterm 1개 ↔ C# PTY (Views/MainWindow.Dev.cs, Services/ClaudeTerminal.cs).
-// 엔진 고르기 [자동][CLAUDE][GPT][GEMINI] = 이 파일 (C# = Views/MainWindow.Ai.cs). 바꾸면 C# 이 터미널을 그 엔진으로 다시 띄움.
+// 엔진 고르기 [자동][CLAUDE][GPT][GEMINI] = 이 파일 (C# = Views/TerminalSession.cs). 바꾸면 C# 이 터미널을 그 엔진으로 다시 띄움.
 // 자동 = C# 이 새 세션마다 실제 엔진을 고름 → 탭에 [자동 · GPT] 처럼 고른 엔진이 보임
 // 키 처리: Ctrl+C 복사(선택 있을 때) / Ctrl+V 붙여넣기 / Shift+Enter 줄바꿈.
 // 맥: Cmd+C/V = 기본 복사·붙여넣기, Ctrl+C/V 는 그대로 AI 로 (Ctrl+V = 이미지 붙이기), Option = Meta

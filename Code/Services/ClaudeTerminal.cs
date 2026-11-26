@@ -3,7 +3,7 @@ using GameMaker.Pty;
 
 namespace GameMaker.Services;
 
-// 오른쪽 터미널 = 진짜 AI 대화형 세션 1개 (Windows = ConPTY, 맥 = forkpty — Pty/IPty.cs PtyLauncher). 엔진 = Ai (claude = Claude Code · gpt = Codex CLI · gemini = Antigravity CLI, 고르는 곳 = Views/MainWindow.Ai.cs).
+// 오른쪽 터미널 = 진짜 AI 대화형 세션 1개 (Windows = ConPTY, 맥 = forkpty — Pty/IPty.cs PtyLauncher). 엔진 = Ai (claude = Claude Code · gpt = Codex CLI · gemini = Antigravity CLI, 고르는 곳 = Views/TerminalSession.cs).
 // 권한 확인창·긴 작업·도구 출력이 그대로 보인다. 작업 폴더 = 지금 프로젝트의 게임 폴더 (없으면 DataDir), 안내(시스템 프롬프트) = claude_context.md (세 엔진 모두 — 엔진별 절 적용 뒤).
 // 이어 하기 = Claude 는 --continue, Codex 는 resume --last (이 작업 폴더의 마지막 대화 → 프로젝트마다·엔진마다 대화가 갈림). 앱을 다시 켜도 대화가 이어진다.
 // GEMINI 는 작업 폴더별 지난 대화를 알 길이 없어 켤 때는 늘 새 대화 — 끝난 뒤 Enter·[이어 하기] 만 agy --continue (가장 최근 대화).
@@ -147,12 +147,26 @@ public sealed class ClaudeTerminal : IDisposable
             args.Add(CommandLine.Quote(PlanUsageModDir));
         }
 
-        if (false == string.IsNullOrWhiteSpace(_config.ClaudeArgs))
+        string exe = ClaudeExe();
+        string extraArgs = (_config.ClaudeArgs ?? "").Trim();
+        // 권한 모드를 설정에서 따로 안 정했으면 auto (1.1.5), 이 claude 가 auto 를 모르면 예전 기본 acceptEdits
+        if (false == extraArgs.Contains("--permission-mode", StringComparison.Ordinal))
         {
-            args.Add(_config.ClaudeArgs.Trim());
+            string mode = ClaudeAutoMode.ArgsFor(Path.IsPathRooted(exe) ? exe : FindOnPath(exe));
+            if (0 == mode.Length)
+            {
+                mode = "--permission-mode acceptEdits";
+            }
+
+            args.Add(mode);
         }
 
-        Attach(PtyLauncher.Start(ClaudeExe(), string.Join(' ', args), workDir, cols, rows, RemovedEnvVars));
+        if (extraArgs.Length > 0)
+        {
+            args.Add(extraArgs);
+        }
+
+        Attach(PtyLauncher.Start(exe, string.Join(' ', args), workDir, cols, rows, RemovedEnvVars));
     }
 
     // GPT = Codex CLI. 못 찾으면 FileNotFoundException (화면이 설치 안내를 띄움)
@@ -231,6 +245,27 @@ public sealed class ClaudeTerminal : IDisposable
     }
 
     // 설정이 기본값 "claude" 인데 이 앱의 PATH 에 없으면 공식 설치기 자리(~/.local/bin)를 봄 — 앱을 켠 뒤 Claude Code 를 깔면 PATH 가 아직 옛것이라서
+    // "claude" 같은 이름만 있을 때 PATH 에서 실제 파일 (못 찾으면 "")
+    private static string FindOnPath(string name)
+    {
+        string fileName = name;
+        if (OperatingSystem.IsWindows() && false == name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = name + ".exe";
+        }
+
+        foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string candidate = Path.Combine(dir.Trim(), fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "";
+    }
+
     private string ClaudeExe()
     {
         string configured = Resolve(_config.ClaudeExe);

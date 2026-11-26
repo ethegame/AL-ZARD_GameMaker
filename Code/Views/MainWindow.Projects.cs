@@ -87,12 +87,7 @@ public partial class MainWindow
         PostProjects(note);
         PostTeams();
         PostGames();
-        if (_terminalStartedOnce)
-        {
-            // 터미널 작업 폴더 = 프로젝트 게임 폴더라 --continue 는 그 프로젝트 대화만 잇는다 (없으면 새로)
-            Post(new { t = "term-reset" });
-            StartTerminal(_lastTerminalSize.Cols, _lastTerminalSize.Rows, continueLast: _terminal.HasPreviousConversation());
-        }
+        _session.Restart();   // 터미널을 띄운 적 있으면 새 프로젝트 게임 폴더에서 다시 (그 프로젝트 대화를 잇거나 새로)
     }
 
     private void PostProjects(string? note = null)

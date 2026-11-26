@@ -264,7 +264,7 @@ body.bench #server-text { display: inline; }
 .um-item { display: flex; align-items: center; gap: 6px; flex: 1 1 150px; min-width: 150px; }
 .um-label { flex: 0 0 auto; font-size: 10px; }
 .um-bar { flex: 1; min-width: 30px; height: 6px; background: rgba(255, 255, 255, .08); border-radius: 2px; overflow: hidden; }
-.um-fill { height: 100%; background: var(--accent-hi); }
+.um-fill { display: block; width: 0; height: 100%; background: var(--accent-hi); transition: width .3s; }   /* span 이라 block 이 없으면 width % 가 안 먹어 막대가 늘 빔 (1.1.5) */
 .um-fill.warn { background: var(--warn); }
 .um-fill.hot { background: var(--bad); }
 .um-value { flex: 0 0 auto; min-width: 70px; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }

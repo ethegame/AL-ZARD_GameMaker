@@ -8,7 +8,8 @@ namespace GameMaker.Views;
 
 // 화면 = wwwroot (Photino 창 — Windows WebView2 · 맥 WKWebView. 창·파일 공급 = Program.cs · Core/HostWindow.cs · Core/WebFiles.cs).
 // C# 은 ComfyUI 서버·API·파일 접근만 맡는다.
-// 터미널(Claude Code)·게임(Godot) = MainWindow.Dev.cs, 4팀 탭·팀 문서 = MainWindow.Teams.cs, 프로젝트 = MainWindow.Projects.cs
+// 기능 클래스 (has-a): 터미널·엔진 고르기 = TerminalSession, 사용량 미터 = UsageMonitor, 그림 실행 칸(ComfyUI·GPT 공용) = RunSlot.
+// 게임(Godot·웹)·메시지 나눔 = MainWindow.Dev.cs, 4팀 탭·팀 문서 = MainWindow.Teams.cs, 프로젝트 = MainWindow.Projects.cs, GPT 그림 = MainWindow.Draw.cs
 // JS → C# : Host.post({t, ...})  (wwwroot/bridge.js)
 // C# → JS : Post({t, ...}) → JSON 글자 하나 → Host.on
 // 2026-11-20 WPF Window → 일반 클래스. 이름은 MainWindow 그대로 (기능 코드 변경을 줄이려고)
@@ -28,12 +29,13 @@ public partial class MainWindow : IDisposable
     private readonly WorkflowStore _workflows;
     private readonly ControlServer _control;
     private readonly string? _controlError;
-    private readonly Dictionary<string, RunState> _runStates = new(); // UI 스레드에서만 접근
+    private readonly UsageMonitor _usage;
+    private readonly TerminalSession _session;
+    private readonly RunSlot _runSlot = new();
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool? _lastAlive;
     private bool _starting;
     private string? _selectedWorkflow; // 화면에서 지금 고른 워크플로 (GET /status — 터미널 claude 의 "이거 고쳐줘" 대상)
-    private CancellationTokenSource? _runCancel;
 
     public MainWindow(HostWindow host)
     {
@@ -49,6 +51,8 @@ public partial class MainWindow : IDisposable
         _workflows = new WorkflowStore(_dataDir);
         _host.Files.DataRoot = _dataDir; // 화면의 <origin>/_data/… = DataDir (결과·선택한 이미지 미리보기)
         _terminal = new ClaudeTerminal(_config, _dataDir);
+        _usage = new UsageMonitor(_host, _config, _terminal, Post);
+        _session = new TerminalSession(_host, _config, _terminal, _usage, Post);
         InitializeDev();
 
         // 포트 0 = 빈 포트 자동. 실제 포트를 설정에 적어 두면 터미널 context 의 {ControlPort} 가 그 값으로 채워짐
@@ -57,11 +61,16 @@ public partial class MainWindow : IDisposable
         _config.ControlPort = _control.Port;
 
         InitializeUpdate();
-        InitializeUsage();
+        _usage.Start();
         InitializeGpu();
 
         _host.MessageReceived += OnHostMessage;
         _statusTimer.Tick += async (_, _) => await PushStatusAsync(force: false);
+        // 맥은 복원 알림이 없어 멈추면 다시 못 켬 → Windows 만 (HostWindow.MinimizedChanged)
+        if (OperatingSystem.IsWindows())
+        {
+            _host.MinimizedChanged += OnMinimizedChanged;
+        }
     }
 
     private Dispatcher Dispatcher => _host.Dispatcher;
@@ -69,17 +78,32 @@ public partial class MainWindow : IDisposable
     // 창이 닫힐 때 (Program 의 WindowClosing). 예전 WPF Closed 와 같은 순서
     public void Dispose()
     {
+        _host.MinimizedChanged -= OnMinimizedChanged;
         _statusTimer.Stop();
         _control.Dispose();
         DisposeDev();
         DisposeUpdate();
-        DisposeUsage();
+        _usage.Dispose();
         DisposeGpu();
         DisposeComfyInstall();
-        _runCancel?.Cancel();
-        _drawCancel?.Cancel();
+        _runSlot.Cancel();
         _server.Dispose();
         _client.Dispose();
+    }
+
+    // 최소화 중엔 화면에만 쓰는 주기 일을 쉰다 — 게임 목록(30초 폴더 훑기)·사용량(30초). 돌아오면 바로 한 번씩 맞춤. GPU 미터는 자기 구독(MainWindow.Gpu.cs).
+    // ComfyUI 상태(_statusTimer)는 안 멈춤: _lastAlive 를 제어 창구 POST /run·GET /status 가 읽는데, 터미널 AI 는 창이 최소화된 채로도 그림을 부르므로
+    private void OnMinimizedChanged(bool minimized)
+    {
+        _usage.SetPaused(minimized);
+        if (minimized)
+        {
+            _gameTimer.Stop();
+            return;
+        }
+
+        _gameTimer.Start();
+        PostGames();
     }
 
     // HostWindow 가 UI 줄에 세운 뒤 부름 (UI 스레드)
@@ -97,35 +121,7 @@ public partial class MainWindow : IDisposable
             switch (type)
             {
                 case "ready": {
-                    PostWorkflowList(null);
-                    PostHistory();
-                    PostProjects();
-                    PostGames();
-                    PostTeams();
-                    _updater?.PostState();
-                    PostAiEngine();
-                    PostUsage();
-                    Post(new { t = "folders", data = _dataDir, workflows = _workflows.Folder });
-                    // 제어 포트 실패 + 시작할 때 기본값으로 대신한 것(설정 깨짐·데이터 폴더 대체). 알림 칸이 하나라 한 번에 묶어 보냄
-                    List<string> notices = new(_config.Notices);
-                    if (null != _controlError)
-                    {
-                        notices.Add(_controlError);
-                    }
-
-                    if (notices.Count > 0)
-                    {
-                        PostError(string.Join(" / ", notices));
-                    }
-
-                    await PushStatusAsync(force: true);
-                    _statusTimer.Start();
-                    // 그림 도구(ComfyUI)가 설정돼 있을 때만 자동 시작 — 없으면 화면이 [설치 방법] 을 보여 줌
-                    if (false == _lastAlive && _server.IsInstalled)
-                    {
-                        await StartServerAsync();
-                    }
-
+                    await InitializeScreenOnReadyAsync();
                     break;
                 }
                 case "comfy-pick-root": {
@@ -192,9 +188,9 @@ public partial class MainWindow : IDisposable
                 }
                 case "cancel": {
                     // 리소스 칸 [중단] — GPT 그림이 도는 중이면 그것을, 아니면 ComfyUI 를 멈춤
-                    if (null != _drawCancel)
+                    if (_runSlot.IsDrawing)
                     {
-                        _drawCancel.Cancel();
+                        _runSlot.Cancel();
                         break;
                     }
 
@@ -228,6 +224,40 @@ public partial class MainWindow : IDisposable
         catch (Exception ex)
         {
             PostError(ex.Message);
+        }
+    }
+
+    // 화면이 뜸(또는 다시 읽음): 모든 칸의 지금 값을 한 번에 보내고 ComfyUI 상태 묻기를 시작
+    private async Task InitializeScreenOnReadyAsync()
+    {
+        PostWorkflowList(null);
+        PostHistory();
+        PostProjects();
+        PostGames();
+        PostTeams();
+        _updater?.PostState();
+        _session.PostEngine();
+        _usage.Post();
+        Post(new { t = "folders", data = _dataDir, workflows = _workflows.Folder });
+        // 제어 포트 실패 + 시작할 때 기본값으로 대신한 것(설정 깨짐·데이터 폴더 대체). 알림 칸이 하나라 한 번에 묶어 보냄
+        List<string> notices = new(_config.Notices);
+        if (null != _controlError)
+        {
+            notices.Add(_controlError);
+        }
+
+        if (notices.Count > 0)
+        {
+            PostError(string.Join(" / ", notices));
+        }
+
+        await PushStatusAsync(force: true);
+        _statusTimer.Start();
+
+        // 그림 도구(ComfyUI)가 설정돼 있을 때만 자동 시작 — 없으면 화면이 [설치 방법] 을 보여 줌
+        if (false == _lastAlive && _server.IsInstalled)
+        {
+            await StartServerAsync();
         }
     }
 
@@ -352,16 +382,15 @@ public partial class MainWindow : IDisposable
     // 화면 [생성] 과 채팅(ControlServer POST /run) 공용. 실행은 뒤에서 진행, runId 바로 반환. UI 스레드에서 호출
     private string StartRun(string name, JsonObject values)
     {
-        if (null != _runCancel || null != _drawCancel)
+        if (_runSlot.IsBusy)
         {
             throw new InvalidOperationException("이미 실행 중입니다.");
         }
 
         JsonObject prompt = WorkflowStore.Apply(_workflows.Load(name), values);
         string runId = $"{DateTime.Now:yyyyMMdd_HHmmss}_{SafeName(name)}";
-        _runCancel = new CancellationTokenSource();
-        _runStates[runId] = new RunState("running", null, new List<string>());
-        _ = RunAsync(runId, name, prompt, values, _runCancel);
+        CancellationTokenSource cancel = _runSlot.Begin(runId, isDraw: false);
+        _ = RunAsync(runId, name, prompt, values, cancel);
         return runId;
     }
 
@@ -387,27 +416,24 @@ public partial class MainWindow : IDisposable
 
             RunRecord record = new(runId, name, started, (DateTime.Now - started).TotalSeconds, values);
             File.WriteAllText(Path.Combine(runDir, "run.json"), JsonSerializer.Serialize(record, AppConfig.JsonOptions));
-            _runStates[runId] = new RunState("done", null, saved);
+            _runSlot.Done(runId, saved);
             Post(new { t = "run-done", run = DescribeRun(runDir) });
         }
         catch (OperationCanceledException)
         {
-            _runStates[runId] = new RunState("failed", "중단됨", new List<string>());
+            _runSlot.Fail(runId, "중단됨");
             Post(new { t = "run-fail", text = "중단됨" });
         }
         catch (Exception ex)
         {
-            _runStates[runId] = new RunState("failed", ex.Message, new List<string>());
+            _runSlot.Fail(runId, ex.Message);
             Post(new { t = "run-fail", text = ex.Message });
         }
         finally
         {
-            cancel.Dispose();
-            _runCancel = null;
+            _runSlot.Release(cancel);
         }
     }
-
-    private sealed record RunState(string State, string? Error, List<string> Files);
 
     // ControlServer 요청 처리 (요청 스레드 → UI 스레드)
     private async Task<(int Status, object Body)> HandleControlAsync(string method, string path, JsonNode? body)
@@ -428,17 +454,14 @@ public partial class MainWindow : IDisposable
                     return (404, new { error = $"워크플로 없음: {workflow}", workflows = _workflows.List() });
                 }
 
-                if (null != _runCancel || null != _drawCancel)
+                if (_runSlot.IsBusy)
                 {
                     return (409, new { error = "이미 실행 중입니다. 끝난 뒤 다시 요청하세요." });
                 }
 
                 if (true != _lastAlive)
                 {
-                    string why = _server.IsInstalled
-                        ? "ComfyUI 서버가 꺼져 있습니다. 리소스 칸 [작업대] 의 [시작] 을 눌러 달라고 사용자에게 안내하세요."
-                        : "그림 도구(ComfyUI)가 이 PC 에 없습니다. 리소스 칸 [설치 방법] 창의 [설치하기] 를 누르면 자동으로 깔린다고 사용자에게 안내하세요.";
-                    return (503, new { error = why });
+                    return (503, new { error = ExplainServerUnavailable() });
                 }
 
                 JsonObject values = body["values"]?.DeepClone() as JsonObject ?? new JsonObject();
@@ -449,18 +472,29 @@ public partial class MainWindow : IDisposable
             if ("GET" == method && path.StartsWith("/run/", StringComparison.Ordinal))
             {
                 string runId = Uri.UnescapeDataString(path["/run/".Length..]);
-                return _runStates.TryGetValue(runId, out RunState? state)
+                return _runSlot.TryGet(runId, out RunState? state) && null != state
                     ? (200, new { state = state.State, error = state.Error, files = state.Files })
                     : (404, new { error = $"실행 기록 없음: {runId}" });
             }
 
             if ("GET" == method && "/status" == path)
             {
-                return (200, new { server = true == _lastAlive, busy = null != _runCancel || null != _drawCancel, selected = _selectedWorkflow, workflows = _workflows.List() });
+                return (200, new { server = true == _lastAlive, busy = _runSlot.IsBusy, selected = _selectedWorkflow, workflows = _workflows.List() });
             }
 
             return (404, new { error = "POST /draw, POST /run, GET /run/<id>, GET /status 만 있습니다." });
         });
+    }
+
+    // POST /run 인데 ComfyUI 가 꺼져 있음 — 터미널 AI 가 사용자에게 다음 할 일을 그대로 전하게
+    private string ExplainServerUnavailable()
+    {
+        if (_server.IsInstalled)
+        {
+            return "ComfyUI 서버가 꺼져 있습니다. 리소스 칸 [작업대] 의 [시작] 을 눌러 달라고 사용자에게 안내하세요.";
+        }
+
+        return "그림 도구(ComfyUI)가 이 PC 에 없습니다. 리소스 칸 [설치 방법] 창의 [설치하기] 를 누르면 자동으로 깔린다고 사용자에게 안내하세요.";
     }
 
     private sealed record RunRecord(string Id, string Workflow, DateTime Started, double Seconds, JsonObject Values);

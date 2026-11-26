@@ -1,5 +1,5 @@
 // 사용량 미터 한 줄 — 오른쪽 AI 칸 엔진 고르기 [자동][CLAUDE][GPT][GEMINI] 바로 아래. 지금 실제로 도는 엔진의 5 Hours · Weekly 막대를 보여 준다
-// (자동이면 자동이 고른 엔진 것). 값 = C# 이 'usage' 로 세 엔진 것을 같이 보냄 (Views/MainWindow.Usage.cs), 도는 엔진 = 'ai-engine' (terminal.js 와 같은 메시지).
+// (자동이면 자동이 고른 엔진 것). 값 = C# 이 'usage' 로 세 엔진 것을 같이 보냄 (Views/UsageMonitor.cs), 도는 엔진 = 'ai-engine' (terminal.js 와 같은 메시지).
 // 마우스를 올리면 다시 차는 시각·받은 시각. 다시 차는 시각이 지난 값은 "–" 로 (1분마다 다시 그림)
 const $ = (id) => document.getElementById(id);
 

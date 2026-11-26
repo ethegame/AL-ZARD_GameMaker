@@ -11,17 +11,24 @@ namespace GameMaker.Views;
 //   GPT    = Services/CodexRateLimits.cs (Codex 대화 기록 끝에서 읽음 — GPT 가 도는 동안 30초마다, 그 밖엔 켤 때 한 번)
 //   GEMINI = Services/AgyQuota.cs (`agy -p /quota` — 부를 때마다 agy 로그 파일이 하나 생겨서 드물게: 켤 때(캐시가 오래됐으면)·GEMINI 로 바꿀 때,
 //            GEMINI 가 도는 동안 15분마다, 아닐 때 1시간마다. 마지막 성공 답 = 설정 폴더 gemini-usage.json — 다시 켜도 바로 보이고 자동 고르기에 씀)
-// 셋 다 계정 단위 값이라 이 앱 밖에서 쓴 것도 반영된다. 자동 고르기(MainWindow.Ai.cs)도 이 값을 본다
-public partial class MainWindow
+// 셋 다 계정 단위 값이라 이 앱 밖에서 쓴 것도 반영된다. 자동 고르기(TerminalSession)·GPT 그림 한도 검사(MainWindow.Draw.cs)는 RemainingOf 로만 묻는다.
+// 11/26 MainWindow partial(Usage.cs) → 이 클래스: 스냅샷을 남이 직접 읽던 것(엔진 고르기·그림)을 묻기로 바꾸려고
+public sealed class UsageMonitor : IDisposable
 {
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan CodexReadInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AgyShownInterval = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan AgyHiddenInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan AgyForceMinInterval = TimeSpan.FromMinutes(1);
     private const string AgyCacheFileName = "gemini-usage.json";
 
-    private PlanUsageReceiver? _planUsage;
+    private readonly HostWindow _host;
+    private readonly AppConfig _config;
+    private readonly ClaudeTerminal _terminal;
+    private readonly Action<object> _post;
+    private readonly PlanUsageReceiver _planUsage;
     private readonly CodexRateLimits _codexLimits = new();
-    private readonly DispatcherTimer _usageTimer = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly DispatcherTimer _timer = new() { Interval = TickInterval };
     private UsageSnapshot? _codexSnapshot;
     private bool _codexReading;
     private DateTime _codexReadUtc = DateTime.MinValue;
@@ -30,36 +37,59 @@ public partial class MainWindow
     private bool _agyStopped;                 // /quota 가 모델을 돌린 흔적 → 이번 실행 동안 다시 안 부름
     private DateTime _agyReadUtc = DateTime.MinValue;
 
-    private void InitializeUsage()
+    public UsageMonitor(HostWindow host, AppConfig config, ClaudeTerminal terminal, Action<object> post)
     {
+        _host = host;
+        _config = config;
+        _terminal = terminal;
+        _post = post;
         _planUsage = new PlanUsageReceiver(AppConfig.LocalAppDir, _host.Log);
-        _planUsage.Changed += () => Dispatcher.BeginInvoke(PostUsage);
+        _planUsage.Changed += () => _host.Dispatcher.BeginInvoke(Post);
+        _timer.Tick += (_, _) => OnTick();
+    }
+
+    public void Start()
+    {
         _planUsage.Start();
         _terminal.PlanUsageModDir = _planUsage.ModDir;
         LoadAgyCache();
-        _usageTimer.Tick += (_, _) =>
-        {
-            if (AiEngines.Gpt == _terminal.Ai)
-            {
-                ReadCodexUsage(force: false);
-            }
-
-            ReadAgyUsage(force: false);
-            PostUsage();
-        };
-        _usageTimer.Start();
+        _timer.Start();
         ReadCodexUsage(force: true);
         ReadAgyUsage(force: false);
     }
 
-    private void DisposeUsage()
+    public void Dispose()
     {
-        _usageTimer.Stop();
-        _planUsage?.Dispose();
+        _timer.Stop();
+        _planUsage.Dispose();
     }
 
-    // 엔진을 바꿨을 때: 그 엔진 값을 바로 다시 읽음
-    private void RefreshUsageOf(string engine)
+    // 창 최소화 중엔 미터가 안 보이므로 쉼. 돌아오면 한 번 바로 읽어 맞춤 (agy 는 자기 15분·1시간 문을 그대로 지킴)
+    public void SetPaused(bool paused)
+    {
+        if (paused)
+        {
+            _timer.Stop();
+            return;
+        }
+
+        _timer.Start();
+        OnTick();
+    }
+
+    private void OnTick()
+    {
+        if (AiEngines.Gpt == _terminal.Ai)
+        {
+            ReadCodexUsage(force: false);
+        }
+
+        ReadAgyUsage(force: false);
+        Post();
+    }
+
+    // 엔진을 바꿨을 때·GPT 그림을 그린 뒤: 그 엔진 값을 바로 다시 읽음
+    public void Refresh(string engine)
     {
         if (AiEngines.Gpt == engine)
         {
@@ -70,6 +100,47 @@ public partial class MainWindow
         {
             ReadAgyUsage(force: true);
         }
+    }
+
+    // 그 엔진 한도 창들 중 가장 적게 남은 % (모름·다시 차는 시각 지남 = null)
+    public double? RemainingOf(string engine)
+    {
+        IEnumerable<UsageWindow> windows;
+        if (AiEngines.Gpt == engine)
+        {
+            windows = _codexSnapshot?.Windows ?? Array.Empty<UsageWindow>();
+        }
+        else if (AiEngines.Gemini == engine)
+        {
+            windows = _geminiSnapshot?.Windows ?? Array.Empty<UsageWindow>();
+        }
+        else
+        {
+            windows = _planUsage.Windows();
+        }
+
+        return MinRemaining(windows);
+    }
+
+    private static double? MinRemaining(IEnumerable<UsageWindow> windows)
+    {
+        double? min = null;
+        DateTime now = DateTime.UtcNow;
+        foreach (UsageWindow window in windows)
+        {
+            if (false == window.IsLive(now))
+            {
+                continue;
+            }
+
+            double left = 100 - window.UsedPercent;
+            if (null == min || left < min.Value)
+            {
+                min = left;
+            }
+        }
+
+        return min;
     }
 
     // 백그라운드에서 Codex 기록 읽기 (겹쳐 읽지 않음)
@@ -94,11 +165,11 @@ public partial class MainWindow
                 snapshot = UsageSnapshot.Fail(ex.Message);
             }
 
-            Dispatcher.BeginInvoke(() =>
+            _host.Dispatcher.BeginInvoke(() =>
             {
                 _codexSnapshot = snapshot;
                 _codexReading = false;
-                PostUsage();
+                Post();
             });
         });
     }
@@ -120,7 +191,7 @@ public partial class MainWindow
 
         if (force)
         {
-            interval = TimeSpan.FromMinutes(1);
+            interval = AgyForceMinInterval;
         }
 
         if (since < interval)
@@ -144,11 +215,11 @@ public partial class MainWindow
         _ = Task.Run(async () =>
         {
             (string? json, string? error) = await AgyQuota.RunAsync(exe);
-            Dispatcher.BeginInvoke(() =>
+            _host.Dispatcher.BeginInvoke(() =>
             {
                 _agyReading = false;
                 ApplyAgyAnswer(json, error);
-                PostUsage();
+                Post();
             });
         });
     }
@@ -242,13 +313,13 @@ public partial class MainWindow
     }
 
     // 세 엔진 값을 같이 보냄 — 엔진을 바꾸면 화면이 바로 그쪽 값을 보여 줌
-    private void PostUsage()
+    public void Post()
     {
-        List<UsageWindow> claude = _planUsage?.Windows() ?? new List<UsageWindow>();
-        string claudeHint = null == _planUsage?.ModDir
+        List<UsageWindow> claude = _planUsage.Windows();
+        string claudeHint = null == _planUsage.ModDir
             ? "사용량 표시를 켜지 못했어요 (이 PC 에 파일을 쓰지 못함)"
             : "이 앱에서 연 Claude 가 한 번 답하면 채워져요 (계속 비어 있으면 Claude Code 를 최신으로 업데이트해 보세요)";
-        DateTime? claudeAt = _planUsage?.LastReceivedUtc();
+        DateTime? claudeAt = _planUsage.LastReceivedUtc();
         UsageSnapshot? gpt = _codexSnapshot;
         List<UsageWindow> gptWindows = gpt?.Windows.Where(window => window.IsLive(DateTime.UtcNow)).ToList() ?? new List<UsageWindow>();
         string gptHint = gpt?.Error ?? (null == gpt ? "Codex 기록 읽는 중…" : "GPT 가 답할 때마다 Codex 가 한도를 기록해요");
@@ -260,7 +331,7 @@ public partial class MainWindow
             geminiHint = "이번 실행 동안 GEMINI 한도 읽기를 멈췄어요 — GEMINI 창 안에서 /quota 로 보세요";
         }
 
-        Post(new
+        _post(new
         {
             t = "usage",
             engine = _terminal.Ai,   // 지금 도는 엔진·고른 값도 같이 (엔진 알림을 놓쳐도 30초 안에 맞춰짐)

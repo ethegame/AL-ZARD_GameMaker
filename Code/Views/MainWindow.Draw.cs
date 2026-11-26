@@ -7,7 +7,7 @@ namespace GameMaker.Views;
 
 // 그림 = GPT — 제어 창구 POST /draw (Services/ControlServer.cs) → Services/GptDrawer.cs 가 codex exec 로 그림 → 게임 폴더로 복사.
 //   {"prompt": "…", "name": "파일 이름(확장자 없이)", "dir": "게임 폴더 기준 상대 경로, 기본 assets/sprites", "transparent": true(기본)} → 바로 {"run": id}.
-//   GET /run/<id> 는 ComfyUI 실행과 같은 모양 ({state, error, files[절대 경로]}) — 실행 상태표(_runStates)를 같이 씀.
+//   GET /run/<id> 는 ComfyUI 실행과 같은 모양 ({state, error, files[절대 경로]}) — 실행 칸(RunSlot)을 같이 씀.
 // 터미널 AI 는 ComfyUI /run 보다 이 창구를 먼저 부른다 (claude_context.md). GPT 를 못 쓰면 503 + 쉬운 이유 → AI 가 ComfyUI 로 예비.
 // 그림 작업은 한 번에 하나 (ComfyUI 실행과도 겹치지 않게 — 리소스 칸 진행 줄이 하나라서). 결과는 리소스 칸 기록에도 남김 (outputs\<id>\, run.json Workflow = "GPT 그림")
 public partial class MainWindow
@@ -18,7 +18,6 @@ public partial class MainWindow
     private const double MinDrawRemainingPercent = 10;
 
     private readonly GptDrawer _drawer = new();
-    private CancellationTokenSource? _drawCancel; // null = 그리는 중 아님 (UI 스레드에서만 접근)
 
     // 고정 앞말 — 사장님 글 앞에 붙임
     private static string DrawPreamble(bool transparent)
@@ -85,21 +84,19 @@ public partial class MainWindow
         }
 
         string name = SafeDrawName(rawName);
-        if (null != _drawCancel || null != _runCancel)
+        if (_runSlot.IsBusy)
         {
             return (409, new { error = "다른 그림을 만드는 중입니다. 끝난 뒤 다시 요청하세요." });
         }
 
-        double? left = MinRemaining(_codexSnapshot?.Windows ?? Array.Empty<UsageWindow>());
+        double? left = _usage.RemainingOf(AiEngines.Gpt);
         if (null != left && left.Value < MinDrawRemainingPercent)
         {
             return (503, new { error = $"GPT 사용량이 거의 다 찼습니다 (남은 {left.Value:0}%). 그림 도구(ComfyUI)가 있으면 POST /run 으로 그리고, 없으면 다시 찰 때까지 기다려야 한다고 사장님께 알려 주세요." });
         }
 
         string runId = $"{DateTime.Now:yyyyMMdd_HHmmss}_GPT_{SafeName(name)}";
-        CancellationTokenSource cancel = new();
-        _drawCancel = cancel;
-        _runStates[runId] = new RunState("running", null, new List<string>());
+        CancellationTokenSource cancel = _runSlot.Begin(runId, isDraw: true);
         Post(new { t = "run-start", run = runId, workflow = GptDrawLabel, external = true });
         Post(new { t = "progress", text = "GPT 가 그리는 중 (1~3분)", value = 0, max = 0 });
         string fullPrompt = "$imagegen " + DrawPreamble(transparent) + prompt;
@@ -116,7 +113,7 @@ public partial class MainWindow
             if (null != result.Error || 0 == result.Images.Count)
             {
                 string error = result.Error ?? "그림이 나오지 않았어요";
-                _runStates[runId] = new RunState("failed", error, new List<string>());
+                _runSlot.Fail(runId, error);
                 Post(new { t = "run-fail", text = $"GPT 그림: {error}" });
                 return;
             }
@@ -137,19 +134,18 @@ public partial class MainWindow
             JsonObject values = new() { ["prompt"] = prompt, ["files"] = new JsonArray(saved.Select(path => (JsonNode)JsonValue.Create(path)!).ToArray()) };
             RunRecord record = new(runId, GptDrawLabel, started, (DateTime.Now - started).TotalSeconds, values);
             File.WriteAllText(Path.Combine(runDir, "run.json"), JsonSerializer.Serialize(record, AppConfig.JsonOptions));
-            _runStates[runId] = new RunState("done", null, saved);
+            _runSlot.Done(runId, saved);
             Post(new { t = "run-done", run = DescribeRun(runDir) });
         }
         catch (Exception ex)
         {
-            _runStates[runId] = new RunState("failed", ex.Message, new List<string>());
+            _runSlot.Fail(runId, ex.Message);
             Post(new { t = "run-fail", text = $"GPT 그림: {ex.Message}" });
         }
         finally
         {
-            cancel.Dispose();
-            _drawCancel = null;
-            ReadCodexUsage(force: true);   // 그림 한 장도 GPT 한도를 씀
+            _runSlot.Release(cancel);
+            _usage.Refresh(AiEngines.Gpt);   // 그림 한 장도 GPT 한도를 씀
         }
     }
 

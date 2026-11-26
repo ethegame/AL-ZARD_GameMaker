@@ -2,7 +2,7 @@ namespace GameMaker.Services;
 
 // 오른쪽 AI 칸에서 고를 수 있는 엔진 — 자동 · Claude (Claude Code) · GPT (OpenAI Codex CLI) · GEMINI (Google Antigravity CLI, agy).
 // 고른 값은 %LOCALAPPDATA%\AL-ZARD_GAMEMAKER\settings.json 의 AiEngine 에 남는다 (Services/AppConfig.cs).
-// 자동 = 새 세션을 띄울 때 실제 엔진 하나를 고름 (Views/MainWindow.Ai.cs PickAutoEngine) — 터미널이 실제로 도는 엔진은 늘 claude | gpt | gemini
+// 자동 = 새 세션을 띄울 때 실제 엔진 하나를 고름 (Views/TerminalSession.cs PickAutoEngine) — 터미널이 실제로 도는 엔진은 늘 claude | gpt | gemini
 public static class AiEngines
 {
     public const string Auto = "auto";
